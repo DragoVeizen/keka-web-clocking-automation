@@ -9,6 +9,7 @@ import imaplib
 import smtplib
 import traceback
 import urllib.request
+import urllib.error
 from io import BytesIO
 from datetime import datetime
 from email.message import EmailMessage
@@ -37,7 +38,10 @@ class Keka:
     URL = os.getenv('KEKA_URL')
     CHECK = os.getenv('KEKA_CHECK', 'in')
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash')
+    # free tier throttles heavily (503) / quota-caps (429); try these in order
+    GEMINI_MODELS = [m.strip() for m in os.getenv(
+        'GEMINI_MODELS',
+        'gemini-2.0-flash,gemini-3.5-flash,gemini-flash-latest').split(',') if m.strip()]
     MAX_LOGIN_ATTEMPTS = 5
 
     # status-email settings (defaults to Gmail SMTP; SMTP_USER/SMTP_PASSWORD required to actually send)
@@ -72,33 +76,46 @@ class Keka:
         white_background.paste(captcha_image, mask=captcha_image.split()[3])
         return white_background
 
-    def gemini_captcha(self, captcha_image):
-        buffered = BytesIO()
-        captcha_image.save(buffered, format="PNG")
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"inline_data": {"mime_type": "image/png",
-                                     "data": base64.b64encode(buffered.getvalue()).decode()}},
-                    {"text": f"Read the distorted captcha in this image. It contains exactly "
-                             f"{self.CAPTCHA_LENGTH} characters (uppercase letters and digits). "
-                             f"Reply with only those characters, nothing else."},
-                ]
-            }]
-        }
+    def _gemini_call(self, model, b64png):
+        payload = {"contents": [{"parts": [
+            {"inline_data": {"mime_type": "image/png", "data": b64png}},
+            {"text": f"Read the distorted captcha in this image. It contains exactly "
+                     f"{self.CAPTCHA_LENGTH} characters (uppercase letters and digits). "
+                     f"Reply with only those characters, nothing else."},
+        ]}]}
         req = urllib.request.Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{self.GEMINI_MODEL}:generateContent",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", "x-goog-api-key": self.GEMINI_API_KEY},
         )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.load(resp)
-            text = ''.join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
-            return ''.join(ch for ch in text if ch.isalnum()).upper()
-        except Exception as e:
-            print(f"Gemini captcha call failed: {e}")
-            return ''
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.load(resp)
+        text = ''.join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+        return ''.join(ch for ch in text if ch.isalnum()).upper()
+
+    def gemini_captcha(self, captcha_image):
+        buffered = BytesIO()
+        captcha_image.save(buffered, format="PNG")
+        b64png = base64.b64encode(buffered.getvalue()).decode()
+        # free tier returns 503 (overloaded) / 429 (quota); try each model with
+        # one short backoff retry, then let the caller fall back to Tesseract
+        for model in self.GEMINI_MODELS:
+            for attempt in range(2):
+                try:
+                    text = self._gemini_call(model, b64png)
+                    if text:
+                        return text
+                    break
+                except urllib.error.HTTPError as e:
+                    print(f"Gemini {model}: HTTP {e.code}")
+                    if e.code in (429, 503) and attempt == 0:
+                        time.sleep(6)
+                        continue
+                    break
+                except Exception as e:
+                    print(f"Gemini {model}: {e}")
+                    break
+        return ''
 
     def solve_captcha_auto(self, captcha_image):
         # Gemini (if configured) reads captchas far more reliably than Tesseract

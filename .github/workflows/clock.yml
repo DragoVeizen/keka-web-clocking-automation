@@ -46,6 +46,13 @@ jobs:
             echo "check=out" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Restore Keka browser session (skips captcha/OTP while still valid)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.keka-chrome-profile
+          key: keka-profile-${{ github.run_id }}
+          restore-keys: keka-profile-
+
       - name: Clock ${{ steps.which.outputs.check }}
         env:
           KEKA_HEADLESS: '1'
@@ -59,6 +66,13 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: python keka_script.py
+
+      - name: Save Keka browser session for the next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.keka-chrome-profile
+          key: keka-profile-${{ github.run_id }}
 
       - name: Upload page dumps on failure
         if: failure()
