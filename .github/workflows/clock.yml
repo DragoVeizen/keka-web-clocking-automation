@@ -1,11 +1,14 @@
 name: Keka Clock
 
 # GitHub Actions cron is UTC. IST has no DST, so these are stable year-round:
-#   04:30 UTC = 10:00 IST (clock-in)   |   12:30 UTC = 18:00 IST (clock-out)
+#   04:10 UTC = 09:40 IST (clock-in)   |   12:30 UTC = 18:00 IST (clock-out)
+# Scheduled runs are only ever LATE, never early. So clock-in is set early
+# (~20 min buffer before 10:00) and clock-out at 18:00 (a late run just logs a
+# little more time). Minutes are off the top-of-hour to reduce queue delay.
 on:
   schedule:
-    - cron: '30 4 * * 1-5'    # clock IN,  Mon-Fri
-    - cron: '30 12 * * 1-5'   # clock OUT, Mon-Fri
+    - cron: '10 4 * * 1-5'    # clock IN  ~09:40 IST, Mon-Fri
+    - cron: '30 12 * * 1-5'   # clock OUT ~18:00 IST, Mon-Fri
   workflow_dispatch:
     inputs:
       action:
@@ -44,10 +47,10 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "check=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "30 4 * * 1-5" ]; then
-            echo "check=in" >> "$GITHUB_OUTPUT"
+          elif [ "$(( 10#$(date -u +%H) ))" -lt 8 ]; then
+            echo "check=in"  >> "$GITHUB_OUTPUT"   # morning UTC -> clock in
           else
-            echo "check=out" >> "$GITHUB_OUTPUT"
+            echo "check=out" >> "$GITHUB_OUTPUT"   # afternoon UTC -> clock out
           fi
 
       - name: Restore Keka browser session (skips captcha/OTP while still valid)
