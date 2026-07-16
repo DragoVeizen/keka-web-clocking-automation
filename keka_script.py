@@ -190,7 +190,8 @@ class Keka:
                 browser.get(f"{self.URL}/#/home/dashboard")
                 time.sleep(5)
             self.wait_for_login_form(browser)
-            captcha_text = self.solve_captcha_auto(self.get_captcha_image(browser))
+            captcha_img = self.get_captcha_image(browser)
+            captcha_text = self.solve_captcha_auto(captcha_img)
             # a human takes over after a failed automatic attempt, when a terminal is available
             if (not captcha_text or attempt > 1) and interactive:
                 captcha_text = input("Type the captcha shown in the Chrome window: ").strip().upper()
@@ -222,7 +223,8 @@ class Keka:
                 if '/Account/' not in browser.current_url:
                     return
                 raise RuntimeError("entered OTP but login did not complete")
-            print(f"Login attempt {attempt} failed")
+            print(f"Login attempt {attempt} failed (read captcha as {captcha_text!r})")
+            self._dump_login_failure(browser, attempt, captcha_img, captcha_text)
         raise RuntimeError(f"Login failed after {self.MAX_LOGIN_ATTEMPTS} attempts")
 
     # --- 2FA OTP handling -------------------------------------------------
@@ -359,6 +361,24 @@ class Keka:
             print(f"page saved to {path} for debugging")
         except Exception as e:
             print(f"could not dump page: {e}")
+
+    def _dump_login_failure(self, browser, attempt, captcha_img, captcha_text):
+        # surface WHY the attempt failed: print the page's visible text (the
+        # error message) to the log, and save the captcha + HTML as artifacts
+        try:
+            body = browser.find_element(By.TAG_NAME, 'body').text
+            print(f"  page text: {' '.join(body.split())[:400]}")
+        except Exception:
+            pass
+        try:
+            d = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+            os.makedirs(d, exist_ok=True)
+            safe = ''.join(c for c in (captcha_text or 'none') if c.isalnum()) or 'none'
+            captcha_img.save(os.path.join(d, f'login_fail_{attempt}_read_{safe}.png'))
+            with open(os.path.join(d, f'login_fail_{attempt}.html'), 'w') as f:
+                f.write(browser.page_source)
+        except Exception as e:
+            print(f"could not dump login failure: {e}")
 
     # locators for the current attendance state
     CLOCK_IN_LINK = (By.XPATH, '//a[normalize-space()="Web Clock-In"]')
