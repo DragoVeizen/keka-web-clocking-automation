@@ -216,7 +216,15 @@ class Keka:
             # logged straight in (trusted session / no 2FA challenge this run)
             if '/Account/' not in browser.current_url:
                 return
-            # 2FA: Keka emails a 6-digit OTP and shows an OTP entry page
+            # 2FA step 1: Keka's "Verify your identity" chooser -> request the
+            # code by email (so we can read it over IMAP)
+            if self.on_identity_chooser(browser):
+                if self.request_email_otp(browser):
+                    otp_requested_at = time.time()  # OTP is sent on this click
+                    time.sleep(4)
+                    if not self.on_otp_page(browser):
+                        self._dump_page(browser, f'otp_entry_attempt_{attempt}')
+            # 2FA step 2: enter the emailed OTP
             if self.on_otp_page(browser):
                 self.handle_otp(browser, otp_requested_at)
                 time.sleep(5)
@@ -228,6 +236,28 @@ class Keka:
         raise RuntimeError(f"Login failed after {self.MAX_LOGIN_ATTEMPTS} attempts")
 
     # --- 2FA OTP handling -------------------------------------------------
+
+    def on_identity_chooser(self, browser):
+        """Keka 2FA step-1 page: 'Verify your identity / Send code to email'."""
+        try:
+            body = browser.find_element(By.TAG_NAME, 'body').text.lower()
+        except Exception:
+            return False
+        return 'verify your identity' in body or 'send code to email' in body
+
+    def request_email_otp(self, browser):
+        """Click 'Send code to email' on the identity-chooser page."""
+        for e in browser.find_elements(By.XPATH, '//button | //a | //*[@role="button"]'):
+            try:
+                t = e.text.strip().lower()
+            except Exception:
+                continue
+            if e.is_displayed() and 'email' in t and ('code' in t or 'send' in t):
+                e.click()
+                print("requested OTP via email")
+                return True
+        print("could not find 'Send code to email' button")
+        return False
 
     def on_otp_page(self, browser):
         """True if the current page is the 2FA OTP entry step (not the login form)."""
