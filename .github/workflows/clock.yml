@@ -19,6 +19,10 @@ concurrency:
   group: keka-clock
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  models: read      # lets the built-in GITHUB_TOKEN call GitHub Models
+
 jobs:
   clock:
     runs-on: ubuntu-latest    # image ships with Google Chrome preinstalled
@@ -61,6 +65,10 @@ jobs:
           KEKA_PASSWORD: ${{ secrets.KEKA_PASSWORD }}
           KEKA_URL: ${{ secrets.KEKA_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # GitHub Models (gpt-4o-mini) as the primary captcha solver
+          VISION_BASE_URL: https://models.github.ai/inference
+          VISION_MODEL: openai/gpt-4o-mini
+          VISION_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           # IMAP for reading the 2FA OTP; falls back to SMTP_* in the script
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}

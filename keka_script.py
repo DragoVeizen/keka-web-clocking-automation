@@ -42,6 +42,11 @@ class Keka:
     GEMINI_MODELS = [m.strip() for m in os.getenv(
         'GEMINI_MODELS',
         'gemini-2.0-flash,gemini-3.5-flash,gemini-flash-latest').split(',') if m.strip()]
+    # OpenAI-compatible vision solver (GitHub Models / Groq / OpenRouter),
+    # tried before Gemini when configured
+    VISION_BASE_URL = os.getenv('VISION_BASE_URL')
+    VISION_API_KEY = os.getenv('VISION_API_KEY')
+    VISION_MODEL = os.getenv('VISION_MODEL', 'openai/gpt-4o-mini')
     MAX_LOGIN_ATTEMPTS = 5
 
     # status-email settings (defaults to Gmail SMTP; SMTP_USER/SMTP_PASSWORD required to actually send)
@@ -117,8 +122,43 @@ class Keka:
                     break
         return ''
 
+    def openai_vision_captcha(self, captcha_image):
+        """Solve via any OpenAI-compatible vision API (GitHub Models, Groq, ...)."""
+        buffered = BytesIO()
+        captcha_image.save(buffered, format="PNG")
+        b64png = base64.b64encode(buffered.getvalue()).decode()
+        payload = {
+            "model": self.VISION_MODEL,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": f"Read the distorted captcha in this image. It contains "
+                                         f"exactly {self.CAPTCHA_LENGTH} characters (uppercase "
+                                         f"letters and digits). Reply with only those characters."},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64png}"}},
+            ]}],
+        }
+        req = urllib.request.Request(
+            self.VISION_BASE_URL.rstrip('/') + '/chat/completions',
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {self.VISION_API_KEY}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.load(resp)
+            text = data["choices"][0]["message"]["content"]
+            return ''.join(ch for ch in text if ch.isalnum()).upper()
+        except Exception as e:
+            print(f"vision solver failed: {e}")
+            return ''
+
     def solve_captcha_auto(self, captcha_image):
-        # Gemini (if configured) reads captchas far more reliably than Tesseract
+        # try providers best-first: OpenAI-compatible vision, then Gemini, then Tesseract
+        if self.VISION_BASE_URL and self.VISION_API_KEY:
+            text = self.openai_vision_captcha(captcha_image)
+            if len(text) == self.CAPTCHA_LENGTH:
+                print(f"vision model read captcha as {text}")
+                return text
         if self.GEMINI_API_KEY:
             text = self.gemini_captcha(captcha_image)
             if len(text) == self.CAPTCHA_LENGTH:
