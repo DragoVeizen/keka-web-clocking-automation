@@ -414,16 +414,50 @@ class Keka:
     CLOCK_IN_LINK = (By.XPATH, '//a[normalize-space()="Web Clock-In"]')
     CLOCK_OUT_BTN = (By.XPATH, '//*[self::a or self::button][normalize-space()="Web Clock-out"]')
 
+    def _dismiss_overlays(self, browser):
+        """Fresh sessions get a product-tour / announcement popup that can
+        intercept clicks; close it if present."""
+        for lab in ('Skip', 'Got it', 'Dismiss', 'No thanks', 'Maybe later', 'Close'):
+            for e in browser.find_elements(
+                    By.XPATH, f'//*[self::button or self::a][normalize-space()="{lab}"]'):
+                try:
+                    if e.is_displayed() and e.is_enabled():
+                        e.click()
+                        time.sleep(1)
+                except Exception:
+                    pass
+        for e in browser.find_elements(By.CSS_SELECTOR, '[aria-label="Close"], [aria-label="close"]'):
+            try:
+                if e.is_displayed():
+                    e.click()
+                    time.sleep(1)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _safe_click(browser, element):
+        """Click, falling back to a JS click when an overlay intercepts it."""
+        try:
+            element.click()
+        except Exception:
+            try:
+                browser.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+            except Exception:
+                pass
+            browser.execute_script("arguments[0].click();", element)
+
     def clock(self, browser):
         """Perform the clock action and return a human-readable status string.
         Raises on a hard failure (button never appeared, etc.)."""
         browser.get(f"{self.URL}/#/me/attendance/logs")
         time.sleep(5)  # Wait for the page to load
+        self._dismiss_overlays(browser)
 
         if self.CHECK.lower() == 'in':
             if browser.find_elements(*self.CLOCK_OUT_BTN):
                 return "already clocked in - no action taken"
-            WebDriverWait(browser, 10).until(EC.element_to_be_clickable(self.CLOCK_IN_LINK)).click()
+            el = WebDriverWait(browser, 10).until(EC.presence_of_element_located(self.CLOCK_IN_LINK))
+            self._safe_click(browser, el)
             time.sleep(4)
             if browser.find_elements(*self.CLOCK_OUT_BTN):
                 return "clocked IN (confirmed)"
@@ -432,12 +466,13 @@ class Keka:
         # clock out
         if browser.find_elements(*self.CLOCK_IN_LINK):
             return "already clocked out - no action taken"
-        WebDriverWait(browser, 10).until(EC.element_to_be_clickable(self.CLOCK_OUT_BTN)).click()
+        el = WebDriverWait(browser, 10).until(EC.presence_of_element_located(self.CLOCK_OUT_BTN))
+        self._safe_click(browser, el)
         try:
             # some Keka tenants show a confirm modal; others clock out on the first click
-            WebDriverWait(browser, 8).until(
-                EC.element_to_be_clickable((By.XPATH, '//button[normalize-space()="Clock-out"]'))
-            ).click()
+            confirm = WebDriverWait(browser, 8).until(
+                EC.presence_of_element_located((By.XPATH, '//button[normalize-space()="Clock-out"]')))
+            self._safe_click(browser, confirm)
         except TimeoutException:
             pass
         time.sleep(4)
