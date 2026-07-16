@@ -1,0 +1,70 @@
+name: Keka Clock
+
+# GitHub Actions cron is UTC. IST has no DST, so these are stable year-round:
+#   04:30 UTC = 10:00 IST (clock-in)   |   12:30 UTC = 18:00 IST (clock-out)
+on:
+  schedule:
+    - cron: '30 4 * * 1-5'    # clock IN,  Mon-Fri
+    - cron: '30 12 * * 1-5'   # clock OUT, Mon-Fri
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Clock in or out'
+        required: true
+        default: 'in'
+        type: choice
+        options: [in, out]
+
+concurrency:
+  group: keka-clock
+  cancel-in-progress: false
+
+jobs:
+  clock:
+    runs-on: ubuntu-latest    # image ships with Google Chrome preinstalled
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr
+          pip install -r requirements.txt
+
+      - name: Decide in vs out
+        id: which
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "check=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "30 4 * * 1-5" ]; then
+            echo "check=in" >> "$GITHUB_OUTPUT"
+          else
+            echo "check=out" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clock ${{ steps.which.outputs.check }}
+        env:
+          KEKA_HEADLESS: '1'
+          KEKA_CHECK: ${{ steps.which.outputs.check }}
+          KEKA_EMAIL: ${{ secrets.KEKA_EMAIL }}
+          KEKA_PASSWORD: ${{ secrets.KEKA_PASSWORD }}
+          KEKA_URL: ${{ secrets.KEKA_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # IMAP for reading the 2FA OTP; falls back to SMTP_* in the script
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: python keka_script.py
+
+      - name: Upload page dumps on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ steps.which.outputs.check }}-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 7
