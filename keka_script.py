@@ -449,25 +449,24 @@ class Keka:
     def clock(self, browser):
         """Perform the clock action and return a human-readable status string.
         Raises on a hard failure (button never appeared, etc.)."""
-        browser.get(f"{self.URL}/#/me/attendance/logs")
-        time.sleep(5)  # Wait for the page to load
-        self._dismiss_overlays(browser)
+        state = self._load_attendance(browser)
+        if state is None:
+            self._dump_page(browser, 'attendance_not_ready')
+            raise RuntimeError("attendance page never showed a clock button")
 
         if self.CHECK.lower() == 'in':
-            if browser.find_elements(*self.CLOCK_OUT_BTN):
+            if state == 'clocked_in':
                 return "already clocked in - no action taken"
-            el = WebDriverWait(browser, 10).until(EC.presence_of_element_located(self.CLOCK_IN_LINK))
-            self._safe_click(browser, el)
+            self._safe_click(browser, browser.find_elements(*self.CLOCK_IN_LINK)[0])
             time.sleep(4)
             if browser.find_elements(*self.CLOCK_OUT_BTN):
                 return "clocked IN (confirmed)"
             return "clicked Web Clock-In but could not confirm the clocked-in state"
 
         # clock out
-        if browser.find_elements(*self.CLOCK_IN_LINK):
+        if state == 'clocked_out':
             return "already clocked out - no action taken"
-        el = WebDriverWait(browser, 10).until(EC.presence_of_element_located(self.CLOCK_OUT_BTN))
-        self._safe_click(browser, el)
+        self._safe_click(browser, browser.find_elements(*self.CLOCK_OUT_BTN)[0])
         try:
             # some Keka tenants show a confirm modal; others clock out on the first click
             confirm = WebDriverWait(browser, 8).until(
@@ -479,6 +478,24 @@ class Keka:
         if browser.find_elements(*self.CLOCK_IN_LINK):
             return "clocked OUT (confirmed)"
         return "clicked Web Clock-out but could not confirm the clocked-out state"
+
+    def _load_attendance(self, browser, tries=3):
+        """Open the attendance page and wait (with retries) until a clock
+        control appears -- robust against slow / post-wake page loads.
+        Returns 'clocked_in' (Web Clock-out shown), 'clocked_out'
+        (Web Clock-In shown), or None if it never loads."""
+        for t in range(1, tries + 1):
+            browser.get(f"{self.URL}/#/me/attendance/logs")
+            time.sleep(6)
+            self._dismiss_overlays(browser)
+            try:
+                WebDriverWait(browser, 20).until(lambda b: (
+                    b.find_elements(*self.CLOCK_OUT_BTN) or b.find_elements(*self.CLOCK_IN_LINK)))
+            except TimeoutException:
+                print(f"attendance page not ready yet (try {t}/{tries})")
+                continue
+            return 'clocked_in' if browser.find_elements(*self.CLOCK_OUT_BTN) else 'clocked_out'
+        return None
 
     def notify(self, status, error):
         action = self.CHECK.lower()
